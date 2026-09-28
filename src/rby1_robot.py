@@ -135,7 +135,6 @@ class RBY1Robot(SingleArticulation):
 
     def _apply_joint_motor_model(self, prim, joint_api, drive_type: str, profile: dict) -> None:
         joint_api.CreateJointFrictionAttr().Set(profile["joint_friction"])
-        joint_api.CreateArmatureAttr().Set(profile["armature"])
         prim.ApplyAPI("PhysxJointAxisAPI", drive_type)
 
         viscous = profile["viscous_nm_s_per_rad"]
@@ -143,6 +142,8 @@ class RBY1Robot(SingleArticulation):
             viscous = np.deg2rad(viscous)
 
         prefix = f"physxJointAxis:{drive_type}"
+        # Author armature on the axis API consumed by PhysX.
+        self._set_float_attr(prim, f"{prefix}:armature", profile["armature"])
         self._set_float_attr(prim, f"{prefix}:staticFrictionEffort", profile["static_effort"])
         self._set_float_attr(prim, f"{prefix}:dynamicFrictionEffort", profile["dynamic_effort"])
         self._set_float_attr(prim, f"{prefix}:viscousFrictionCoefficient", viscous)
@@ -273,7 +274,7 @@ class RBY1Robot(SingleArticulation):
     # ------------------------------------------------------------------
 
     def get_joint_properties(self, stage) -> None:
-        """Print the current joint configuration for revolute joints."""
+        """Print USD joint properties, using the active axis API for motor parameters."""
         for prim in stage.Traverse():
             joint_path = prim.GetPath()
             type_name = prim.GetTypeName()
@@ -287,18 +288,23 @@ class RBY1Robot(SingleArticulation):
             joint_api = PhysxSchema.PhysxJointAPI(prim)
             print(f"  [Joint]    max_joint_velocity = {joint_api.GetMaxJointVelocityAttr().Get()}")
             print(f"  [Joint]    joint_friction     = {joint_api.GetJointFrictionAttr().Get()}")
-            print(f"  [Joint]    armature           = {joint_api.GetArmatureAttr().Get()}")
             axis_prefix = "physxJointAxis:angular"
-            static_friction = prim.GetAttribute(f"{axis_prefix}:staticFrictionEffort")
-            dynamic_friction = prim.GetAttribute(f"{axis_prefix}:dynamicFrictionEffort")
-            viscous_friction = prim.GetAttribute(f"{axis_prefix}:viscousFrictionCoefficient")
-
-            if static_friction and dynamic_friction and viscous_friction:
-                print(f"  [Axis]     static_friction    = {static_friction.Get()}")
-                print(f"  [Axis]     dynamic_friction   = {dynamic_friction.Get()}")
-                print(f"  [Axis]     viscous_friction   = {viscous_friction.Get()}")
+            if "PhysxJointAxisAPI:angular" in prim.GetAppliedSchemas():
+                armature = prim.GetAttribute(f"{axis_prefix}:armature")
+                static_friction = prim.GetAttribute(f"{axis_prefix}:staticFrictionEffort")
+                dynamic_friction = prim.GetAttribute(f"{axis_prefix}:dynamicFrictionEffort")
+                viscous_friction = prim.GetAttribute(f"{axis_prefix}:viscousFrictionCoefficient")
+                print(f"  [Axis]     armature           = {armature.Get()} kg*m^2")
+                print(f"  [Axis]     static_friction    = {static_friction.Get()} N*m")
+                print(f"  [Axis]     dynamic_friction   = {dynamic_friction.Get()} N*m")
+                viscous = viscous_friction.Get()
+                print(f"  [Axis]     viscous_friction   = {viscous} N*m*s/deg (USD)")
+                if viscous is not None:
+                    print(f"  [Axis]     viscous_friction   = {np.rad2deg(viscous)} N*m*s/rad")
             else:
-                print("  [Axis]     friction properties = Not applied.")
+                # Passive joints without an axis API still use the legacy properties.
+                print(f"  [Joint]    armature           = {joint_api.GetArmatureAttr().Get()} kg*m^2")
+                print("  [Axis]     motor properties   = Not applied.")
 
             if prim.HasAPI(UsdPhysics.DriveAPI):
                 drive = UsdPhysics.DriveAPI(prim, "angular")

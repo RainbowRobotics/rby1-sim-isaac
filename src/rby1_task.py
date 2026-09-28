@@ -46,18 +46,19 @@ _BODY_JOINT_NAMES = (
     "head_0", "head_1",
 )
 
+# Simulation PD gains: kp [N*m/rad], kd [N*m*s/rad].
 _BODY_JOINT_KP = (
-    3911.0, 3911.0, 3911.0, 573.6, 573.6, 573.6,
-    208.6, 208.6, 208.6, 91.27, 39.11, 39.11, 39.11,
-    208.6, 208.6, 208.6, 91.27, 39.11, 39.11, 39.11,
-    39.11, 39.11,
+    199500.1, 99750.05, 99750.05, 29260.1, 29260.1, 29260.1,
+    10640.0, 12662.4963, 10640.0, 4655.0, 2625.996, 1982.147, 4365.12,
+    10640.0, 10640.0, 10640.0, 4655.0, 2393.5159, 2054.4908, 4365.12,
+    2151.3, 2151.3,
 )
 
 _BODY_JOINT_KD = (
-    3520.0, 3520.0, 3520.0, 1043.0, 1043.0, 1043.0,
-    521.5, 521.5, 321.5, 208.6, 91.26, 91.26, 61.26,
-    521.5, 521.5, 321.5, 208.6, 91.26, 91.26, 61.26,
-    91.26, 91.26,
+    359.1, 374.7954, 398.2526, 106.4, 106.4, 106.4,
+    53.2, 56.5315, 53.2, 21.28, 6.024, 6.024, 5.9024,
+    53.2, 53.2, 53.2, 21.28, 6.024, 6.024, 4.9104,
+    10.04, 10.04,
 )
 
 RBY1_MODEL_CONFIGS = {
@@ -67,7 +68,7 @@ RBY1_MODEL_CONFIGS = {
         modular_gripper_supported=True,
         cpp_joint_names=("right_wheel", "left_wheel", *_BODY_JOINT_NAMES),
         joint_kp=(262.8, 262.8, *_BODY_JOINT_KP),
-        joint_kd=(3754.9, 3754.9, *_BODY_JOINT_KD),
+        joint_kd=(7.510, 7.510, *_BODY_JOINT_KD),
         mobility_dof=2,
         reference_wheel_target=(-1.0, -0.5),
     ),
@@ -77,7 +78,7 @@ RBY1_MODEL_CONFIGS = {
         modular_gripper_supported=True,
         cpp_joint_names=("wheel_fr", "wheel_fl", "wheel_rr", "wheel_rl", *_BODY_JOINT_NAMES),
         joint_kp=(262.8, 262.8, 262.8, 262.8, *_BODY_JOINT_KP),
-        joint_kd=(3754.9, 3754.9, 3754.9, 3754.9, *_BODY_JOINT_KD),
+        joint_kd=(7.510, 7.510, 7.510, 7.510, *_BODY_JOINT_KD),
         mobility_dof=4,
         reference_wheel_target=(0.5, -0.5, -0.5, 0.5),
     ),

@@ -3,7 +3,7 @@
 """Joint motor model profiles for the RBY1 robot.
 
 Each profile describes the PhysX friction/effort/armature parameters of the
-underlying Dynamixel motor model. Profiles are looked up by joint base name
+joint actuator at the output shaft. Profiles are looked up by joint base name
 (stripped of ``left_``/``right_`` prefix).
 """
 from __future__ import annotations
@@ -11,49 +11,49 @@ from __future__ import annotations
 from typing import Final
 
 
-# Motor model parameters keyed by motor family.
+# Output-shaft inertia and friction parameters.
 JOINT_MOTOR_MODEL_PROFILES: Final[dict[str, dict[str, float]]] = {
     "arm_shoulder": {
         "joint_friction": 0.0,
-        "static_effort": 5.2,
-        "dynamic_effort": 5.2,
-        "viscous_nm_s_per_rad": 4.7,
-        "armature": 0.29,
+        "static_effort": 3.31953,
+        "dynamic_effort": 3.31953,
+        "viscous_nm_s_per_rad": 11.78777,
+        "armature": 0.77308,
     },
     "arm_elbow": {
         "joint_friction": 0.0,
-        "static_effort": 2.2,
-        "dynamic_effort": 2.2,
-        "viscous_nm_s_per_rad": 1.9,
-        "armature": 0.4,
+        "static_effort": 1.84784,
+        "dynamic_effort": 1.84784,
+        "viscous_nm_s_per_rad": 8.24941,
+        "armature": 0.33557,
     },
     "arm_wrist": {
         "joint_friction": 0.0,
-        "static_effort": 2.2,
-        "dynamic_effort": 2.2,
-        "viscous_nm_s_per_rad": 1.9,
-        "armature": 0.2,
+        "static_effort": 1.61256,
+        "dynamic_effort": 1.61256,
+        "viscous_nm_s_per_rad": 9.1138,
+        "armature": 0.10867,
     },
     "arm_wrist2": {
         "joint_friction": 0.0,
-        "static_effort": 1.2,
-        "dynamic_effort": 1.2,
-        "viscous_nm_s_per_rad": 1.0,
-        "armature": 0.2,
+        "static_effort": 3.903784765,
+        "dynamic_effort": 3.903784765,
+        "viscous_nm_s_per_rad": 15.625317589,
+        "armature": 0.12,
     },
     "lower_torso": {
         "joint_friction": 0.0,
-        "static_effort": 10.0,
-        "dynamic_effort": 10.0,
-        "viscous_nm_s_per_rad": 20.0,
-        "armature": 1.7,
+        "static_effort": 10.12066,
+        "dynamic_effort": 10.12066,
+        "viscous_nm_s_per_rad": 73.30826,
+        "armature": 8.8327,
     },
     "upper_torso": {
         "joint_friction": 0.0,
-        "static_effort": 10.0,
-        "dynamic_effort": 10.0,
-        "viscous_nm_s_per_rad": 10.0,
-        "armature": 1.7,
+        "static_effort": 9.25639,
+        "dynamic_effort": 9.25639,
+        "viscous_nm_s_per_rad": 30.11842,
+        "armature": 2.12243,
     },
     "default": {
         "joint_friction": 0.0,
@@ -63,6 +63,7 @@ JOINT_MOTOR_MODEL_PROFILES: Final[dict[str, dict[str, float]]] = {
         "armature": 0.5,
     },
 }
+
 
 # Map joint base name → motor profile key. Names not present here use "default".
 JOINT_MODEL_TO_MOTOR_MODEL_PROFILE: Final[dict[str, str]] = {

@@ -13,8 +13,10 @@ class PDController:
 
     For each joint the computed torque is::
 
-        torque = feedback_gain * (kp * pos_err + kd * vel_err * PD_CONTROL_DT)
+        torque = feedback_gain * (kp * pos_err + kd * vel_err)
                  + feedforward_term
+
+    Gains use kp [N*m/rad] and kd [N*m*s/rad]; the D term has no dt factor.
 
     Normal joints receive absolute position targets. Wheel joints receive
     velocity targets, which are integrated into ``target_pos``.
@@ -38,7 +40,7 @@ class PDController:
 
         self.target_torque = (
             self.feedback_gain
-            * (self.kp * pos_error + self.kd * vel_error * PD_CONTROL_DT)
+            * (self.kp * pos_error + self.kd * vel_error)
             + self.feedforward_term
         )
         return self.target_torque
