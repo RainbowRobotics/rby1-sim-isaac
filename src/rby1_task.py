@@ -18,6 +18,7 @@ from pxr import Gf, Sdf, UsdPhysics
 
 from config import PD_CONTROL_DT
 from gripper_servers import BaseGripperServer
+from motor_profiles import JOINT_MODEL_TO_MOTOR_MODEL_PROFILE, strip_side_prefix
 from rby1_controller import PDController
 from rby1_robot import RBY1Robot
 from rby1_udp_bridge import RBY1UdpBridge
@@ -33,8 +34,6 @@ class RBY1ModelConfig:
     base_usd_file_name: str
     modular_gripper_supported: bool
     cpp_joint_names: tuple[str, ...]
-    joint_kp: tuple[float, ...]
-    joint_kd: tuple[float, ...]
     mobility_dof: int
     reference_wheel_target: tuple[float, ...]
 
@@ -46,20 +45,24 @@ _BODY_JOINT_NAMES = (
     "head_0", "head_1",
 )
 
-# Simulation PD gains: kp [N*m/rad], kd [N*m*s/rad].
-_BODY_JOINT_KP = (
-    199500.1, 99750.05, 99750.05, 29260.1, 29260.1, 29260.1,
-    10640.0, 12662.4963, 10640.0, 4655.0, 2625.996, 1982.147, 4365.12,
-    10640.0, 10640.0, 10640.0, 4655.0, 2393.5159, 2054.4908, 4365.12,
-    2151.3, 2151.3,
-)
+# Shared motor gains: kp [N*m/rad], kd [N*m*s/rad].
+_MOTOR_PD_GAINS = {
+    "wheel": (262.8, 7.510),
+    "lower_torso": (99750.05, 398.2526),
+    "upper_torso": (29260.1, 106.4),
+    "arm_shoulder": (10640.0, 53.2),
+    "arm_elbow": (4655.0, 21.28),
+    "arm_wrist": (2151.3, 6.024),
+    "arm_wrist2": (4365.12, 5.9024),
+}
+_MOTOR_PD_GAINS["head"] = _MOTOR_PD_GAINS["arm_wrist"]
 
-_BODY_JOINT_KD = (
-    359.1, 374.7954, 398.2526, 106.4, 106.4, 106.4,
-    53.2, 56.5315, 53.2, 21.28, 6.024, 6.024, 5.9024,
-    53.2, 53.2, 53.2, 21.28, 6.024, 6.024, 4.9104,
-    10.04, 10.04,
-)
+
+def _joint_pd_gains(joint_name: str) -> tuple[float, float]:
+    name = strip_side_prefix(joint_name)
+    group = JOINT_MODEL_TO_MOTOR_MODEL_PROFILE.get(name, name.split("_", 1)[0])
+    return _MOTOR_PD_GAINS[group]
+
 
 RBY1_MODEL_CONFIGS = {
     "a": RBY1ModelConfig(
@@ -67,8 +70,6 @@ RBY1_MODEL_CONFIGS = {
         base_usd_file_name="model_v_1_2_a.usd",
         modular_gripper_supported=True,
         cpp_joint_names=("right_wheel", "left_wheel", *_BODY_JOINT_NAMES),
-        joint_kp=(262.8, 262.8, *_BODY_JOINT_KP),
-        joint_kd=(7.510, 7.510, *_BODY_JOINT_KD),
         mobility_dof=2,
         reference_wheel_target=(-1.0, -0.5),
     ),
@@ -77,8 +78,6 @@ RBY1_MODEL_CONFIGS = {
         base_usd_file_name="model_v_1_2_m.usd",
         modular_gripper_supported=True,
         cpp_joint_names=("wheel_fr", "wheel_fl", "wheel_rr", "wheel_rl", *_BODY_JOINT_NAMES),
-        joint_kp=(262.8, 262.8, 262.8, 262.8, *_BODY_JOINT_KP),
-        joint_kd=(7.510, 7.510, 7.510, 7.510, *_BODY_JOINT_KD),
         mobility_dof=4,
         reference_wheel_target=(0.5, -0.5, -0.5, 0.5),
     ),
@@ -833,10 +832,9 @@ class RBY1Task(BaseTask):
 
     def _initialize_pd_controller(self) -> None:
         """Create the PD controller using per-joint gains (C++ model DOF order)."""
-        joint_kp = np.asarray(self.model_config.joint_kp, dtype=np.float32)
-        joint_kd = np.asarray(self.model_config.joint_kd, dtype=np.float32)
-        if len(joint_kp) != len(self.joint_indices) or len(joint_kd) != len(self.joint_indices):
-            raise RuntimeError("[RBY1Task] PD gain array length does not match the C++ model joint count.")
+        joint_kp, joint_kd = np.asarray([
+            _joint_pd_gains(name) for name in self.model_config.cpp_joint_names
+        ], dtype=np.float32).T
 
         self.pd_controller = PDController(kp=joint_kp, kd=joint_kd, num_joints=len(self.joint_indices))
 

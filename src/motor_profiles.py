@@ -80,6 +80,8 @@ JOINT_MODEL_TO_MOTOR_MODEL_PROFILE: Final[dict[str, str]] = {
     "torso_3": "upper_torso",
     "torso_4": "upper_torso",
     "torso_5": "upper_torso",
+    "head_0": "arm_wrist",
+    "head_1": "arm_wrist",
 }
 
 
