@@ -12,7 +12,8 @@
 #   GRIPPER_NAME=rb_gripper ./docker/run.sh
 #
 # Optional environment variables:
-#   IMAGE_NAME       docker image (default: rby1-sim-isaac:latest)
+#   IMAGE_NAME       docker image (default: rainbowroboticsofficial/rby1-sim-isaac:0.10.7-a_v1.2)
+#   ISAAC_HOST_DIR  persistent cache/config directory (default: ${HOME}/docker/isaac-sim)
 #   CONTAINER_NAME   container name (default: rby1-sim-isaac)
 #   GRIPPER_NAME     default gripper folder under assets/gripper; overridden by --gripper-name
 #   RBY1_ISAAC_DIR   path to rby1-sim-isaac repo (containing src/, assets/).
@@ -27,6 +28,35 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 _IMAGE_NAME_ENV="${IMAGE_NAME:-}"
 CONTAINER_NAME="${CONTAINER_NAME:-rby1-sim-isaac}"
+
+# Parse --image argument (remaining args are forwarded to simulation.py)
+_IMAGE_EXPLICIT=0
+EXTRA_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --image)
+            [[ $# -ge 2 && -n "$2" && "$2" != -* ]] || { echo "[run] ERROR: a tag must be specified after --image." >&2; exit 1; }
+            IMAGE_NAME="$2"
+            _IMAGE_EXPLICIT=1
+            shift 2
+            ;;
+        *)
+            EXTRA_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+IMAGE_NAME="${IMAGE_NAME:-rainbowroboticsofficial/rby1-sim-isaac:0.10.7-a_v1.2}"
+# Expand a bare version tag (e.g. "0.10.7-a_v1.2") to the full registry image name.
+if [[ "${IMAGE_NAME}" != */* && "${IMAGE_NAME}" != *:* ]]; then
+    IMAGE_NAME="rainbowroboticsofficial/rby1-sim-isaac:${IMAGE_NAME}"
+fi
+if [[ $_IMAGE_EXPLICIT -eq 0 && -z "${_IMAGE_NAME_ENV}" ]]; then
+    echo "[run] WARNING: No image tag specified. Using default (${IMAGE_NAME})." >&2
+    echo "[run]          To specify: ./docker/run.sh --image <TAG>" >&2
+    echo "[run]                     IMAGE_NAME=<TAG> ./docker/run.sh" >&2
+fi
 
 # Path to rby1-sim-isaac repo (containing src/, assets/).
 # If unset, automatically uses the repo root relative to this script.
@@ -44,27 +74,51 @@ fi
 # Isaac Sim cache/config directory (persists shader cache etc. on the host)
 ISAAC_HOST_DIR="${ISAAC_HOST_DIR:-${HOME}/docker/isaac-sim}"
 
-# Container user (1234:1234) must own this directory; use sudo if it exists with different ownership
-MKDIR=(mkdir -p)
-if [[ -d "${ISAAC_HOST_DIR}" && ! -w "${ISAAC_HOST_DIR}" ]]; then
-    MKDIR=(sudo mkdir -p)
-fi
+# Resolve relative paths before passing them to Docker bind mounts.
+ISAAC_HOST_DIR="$(realpath -m -- "${ISAAC_HOST_DIR}")"
 
-"${MKDIR[@]}" \
-    "${ISAAC_HOST_DIR}/cache/main/ov" \
-    "${ISAAC_HOST_DIR}/cache/main/warp" \
-    "${ISAAC_HOST_DIR}/cache/computecache" \
-    "${ISAAC_HOST_DIR}/config" \
-    "${ISAAC_HOST_DIR}/data/documents" \
-    "${ISAAC_HOST_DIR}/data/Kit" \
-    "${ISAAC_HOST_DIR}/logs" \
+CACHE_DIRS=(
+    "${ISAAC_HOST_DIR}"
+    "${ISAAC_HOST_DIR}/cache"
+    "${ISAAC_HOST_DIR}/cache/main"
+    "${ISAAC_HOST_DIR}/cache/main/ov"
+    "${ISAAC_HOST_DIR}/cache/main/warp"
+    "${ISAAC_HOST_DIR}/cache/computecache"
+    "${ISAAC_HOST_DIR}/cache/kit"
+    "${ISAAC_HOST_DIR}/config"
+    "${ISAAC_HOST_DIR}/data"
+    "${ISAAC_HOST_DIR}/data/documents"
+    "${ISAAC_HOST_DIR}/data/Kit"
+    "${ISAAC_HOST_DIR}/logs"
     "${ISAAC_HOST_DIR}/pkg"
+)
+for cache_dir in "${CACHE_DIRS[@]}"; do
+    [[ -d "${cache_dir}" ]] && continue
+    # Find the nearest existing parent, including for a new cache root.
+    cache_parent="$(dirname -- "${cache_dir}")"
+    while [[ ! -e "${cache_parent}" ]]; do
+        cache_parent="$(dirname -- "${cache_parent}")"
+    done
+    if [[ -w "${cache_parent}" && -x "${cache_parent}" ]]; then
+        mkdir -p -- "${cache_dir}"
+    else
+        sudo mkdir -p -- "${cache_dir}"
+    fi
+done
 
-# Grant ownership so the Isaac Sim container user (1234:1234) can write to the cache
-if [[ "$(stat -c '%u' "${ISAAC_HOST_DIR}")" != "1234" ]]; then
-    echo "[run] Changing ownership of ${ISAAC_HOST_DIR} to 1234:1234 (requires sudo)"
-    sudo chown -R 1234:1234 "${ISAAC_HOST_DIR}"
-fi
+# Check only managed directories; use sudo if a private parent blocks access.
+for cache_dir in "${CACHE_DIRS[@]}"; do
+    cache_stat="$(stat -L -c '%u:%g:%a' -- "${cache_dir}" 2>/dev/null)" ||
+        cache_stat="$(sudo stat -L -c '%u:%g:%a' -- "${cache_dir}")"
+    IFS=: read -r cache_uid cache_gid cache_mode <<< "${cache_stat}"
+    if [[ "${cache_uid}:${cache_gid}" != "1234:1234" ]]; then
+        echo "[run] Changing ownership of ${cache_dir} to 1234:1234 (requires sudo)"
+        sudo chown 1234:1234 -- "${cache_dir}"
+    fi
+    if (( (8#${cache_mode} & 0700) != 0700 )); then
+        sudo chmod u+rwx -- "${cache_dir}"
+    fi
+done
 
 # Allow X11 local access (grant uid=1234 for container user + local socket)
 xhost +SI:localuser:\#1234 +local: >/dev/null 2>&1 || true
@@ -79,35 +133,6 @@ echo "[run] assets mount: ${RBY1_ISAAC_DIR}/assets"
 TTY_FLAGS=(-it)
 if [[ "${DOCKER_TTY:-1}" == "0" ]]; then
     TTY_FLAGS=()
-fi
-
-# Parse --image argument (remaining args are forwarded to simulation.py)
-_IMAGE_EXPLICIT=0
-EXTRA_ARGS=()
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --image)
-            [[ $# -ge 2 ]] || { echo "[run] ERROR: a tag must be specified after --image." >&2; exit 1; }
-            IMAGE_NAME="$2"
-            _IMAGE_EXPLICIT=1
-            shift 2
-            ;;
-        *)
-            EXTRA_ARGS+=("$1")
-            shift
-            ;;
-    esac
-done
-
-IMAGE_NAME="${IMAGE_NAME:-rby1-sim-isaac:0.10.7-a_v1.2}"
-# Expand a bare version tag (e.g. "0.10.7-a_v1.2") to the full registry image name.
-if [[ "${IMAGE_NAME}" != */* && "${IMAGE_NAME}" != *:* ]]; then
-    IMAGE_NAME="rainbowroboticsofficial/rby1-sim-isaac:${IMAGE_NAME}"
-fi
-if [[ $_IMAGE_EXPLICIT -eq 0 && -z "${_IMAGE_NAME_ENV}" ]]; then
-    echo "[run] WARNING: No image tag specified. Using default (${IMAGE_NAME})." >&2
-    echo "[run]          To specify: ./docker/run.sh --image <TAG>" >&2
-    echo "[run]                     IMAGE_NAME=<TAG> ./docker/run.sh" >&2
 fi
 
 _has_arg() { local n="$1"; shift; for a in "$@"; do [[ "$a" == "$n" ]] && return 0; done; return 1; }
@@ -166,6 +191,7 @@ docker run \
     "${ASSETS_MOUNT[@]}" \
     -v "${ISAAC_HOST_DIR}/cache/main:/isaac-sim/.cache:rw" \
     -v "${ISAAC_HOST_DIR}/cache/computecache:/isaac-sim/.nv/ComputeCache:rw" \
+    -v "${ISAAC_HOST_DIR}/cache/kit:/isaac-sim/kit/cache:rw" \
     -v "${ISAAC_HOST_DIR}/logs:/isaac-sim/.nvidia-omniverse/logs:rw" \
     -v "${ISAAC_HOST_DIR}/config:/isaac-sim/.nvidia-omniverse/config:rw" \
     -v "${ISAAC_HOST_DIR}/data:/isaac-sim/.local/share/ov/data:rw" \
