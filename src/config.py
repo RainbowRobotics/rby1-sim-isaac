@@ -81,3 +81,75 @@ JOINT_KD_BASE: Final[np.ndarray] = np.array([
 
 # Fixed dt used by the PD torque controller. Kept as a control-domain alias of PHYSICS_DT.
 PD_CONTROL_DT: Final[float] = PHYSICS_DT
+
+
+# ============================================================
+# Joint servo model (identified on an RB-Y1 Model A v1.2)
+# ============================================================
+#
+# The real joint drivers act on the current measured position and velocity and on a position target that
+# reached them some ticks ago (servo fit: tau = kp * (target[k - d] - q[k]) - kd * qd[k], r^2 0.99 for this
+# structure). The simulated servo reproduces that: the target is delayed per motor group, the D term uses the
+# undelayed finite-difference velocity. SERVO_PROFILE selects the command delays:
+#   "delayed"  - equivalent command delay per group (default; matches the robot's rise time and overshoot)
+#   "no_delay" - no command delay (arm steps ~10-13 ms faster than the robot; same overshoot)
+SERVO_PROFILE: Final[str] = os.environ.get("RBY1_SERVO_PROFILE", "delayed").strip().lower()
+
+# Equivalent command delay per motor group [PD ticks of PD_CONTROL_DT], fitted together with kd so that the rigid
+# model reproduces the robot's step rise time and overshoot (rb_gripper mounted). The drivers' measured
+# target-to-torque delay is 14-17 ms, but the encoders are motor-side: the rotor moves before the harmonic drive and
+# link do, so the rigid model needs less delay on the large joints (none on the lower torso, whose steps are also
+# shaped by a 0.05 rad/s command ramp) and about the full delay on the wrists.
+COMMAND_DELAY_TICKS: Final[dict[str, int]] = {
+    "lower_torso": 0,
+    "upper_torso": 2,
+    "arm_shoulder": 2,
+    "arm_elbow": 5,
+    "arm_wrist": 7,
+    "arm_wrist2": 8,
+    "head": 7,
+    "wheel": 0,
+}
+
+# Delay of the feedback gain and feedforward torque per motor group [ticks] (torque commands: joint impedance and
+# other feedback-gain-0 modes). Fitted through the rby1 core (joint impedance steps K 500/900, 50 % delay
+# and overshoot vs the robot): the shoulder matches best undelayed (29.1 ms / 6.8 % vs robot 27.7 ms / 7.8 %;
+# with 2-3 ticks 34-35 ms), the elbow with its target delay (33.1 ms / 11.9 % vs 31.7 ms / 14.5 %; undelayed
+# 19.6 ms / 1.6 %). Groups without an impedance record use their target delay. The drivers' measured delay
+# (7-8 ticks for every group, RBY1_FF_DELAY=measured) over-delays: 31-34 % overshoot and the robot's torque_swing
+# guard trips. RBY1_FF_DELAY=equal uses COMMAND_DELAY_TICKS for all groups.
+FEEDFORWARD_DELAY_TICKS: Final[dict[str, int]] = {
+    "lower_torso": 0,
+    "upper_torso": 2,
+    "arm_shoulder": 0,
+    "arm_elbow": 5,
+    "arm_wrist": 7,
+    "arm_wrist2": 8,
+    "head": 7,
+    "wheel": 0,
+}
+MEASURED_DRIVER_DELAY_TICKS: Final[dict[str, int]] = {
+    "lower_torso": 7,
+    "upper_torso": 8,
+    "arm_shoulder": 8,
+    "arm_elbow": 8,
+    "arm_wrist": 8,
+    "arm_wrist2": 8,
+    "head": 8,
+    "wheel": 0,
+}
+FEEDFORWARD_DELAY_MODE: Final[str] = os.environ.get("RBY1_FF_DELAY", "fitted").strip().lower()
+
+# Samples of the moving average applied to the finite-difference joint velocity that is reported as robot
+# state. The PD D term does not use this average (a 10-sample average lags ~9 ms, which turns the D term into
+# an excitation at the identified gains); it uses the raw difference (PD_VELOCITY_AVG_WINDOW samples).
+STATE_VELOCITY_AVG_WINDOW: Final[int] = 10
+PD_VELOCITY_AVG_WINDOW: Final[int] = int(os.environ.get("RBY1_PD_VELOCITY_WINDOW", "1"))
+
+# Joint friction model.
+#   "physx"  - PhysX joint-axis friction (staticFrictionEffort / dynamicFrictionEffort / viscous), solved in PGS.
+#   "torque" - the same Coulomb + viscous values applied as an explicit torque in the PD loop,
+#              tau_f = -(tau_c * tanh(v / FRICTION_VELOCITY_EPS) + b * v); PhysX joint friction is set to 0.
+FRICTION_MODEL: Final[str] = os.environ.get("RBY1_FRICTION_MODEL", "physx").strip().lower()
+FRICTION_VELOCITY_EPS: Final[float] = float(os.environ.get("RBY1_FRICTION_VELOCITY_EPS", "0.03"))  # [rad/s]
+

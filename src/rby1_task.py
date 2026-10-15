@@ -16,9 +16,20 @@ from isaacsim.core.utils.rotations import quat_to_rot_matrix
 from isaacsim.core.utils.stage import add_reference_to_stage
 from pxr import Gf, Sdf, UsdPhysics
 
-from config import PD_CONTROL_DT
+from config import (
+    COMMAND_DELAY_TICKS,
+    FEEDFORWARD_DELAY_MODE,
+    FEEDFORWARD_DELAY_TICKS,
+    MEASURED_DRIVER_DELAY_TICKS,
+    FRICTION_MODEL,
+    FRICTION_VELOCITY_EPS,
+    PD_CONTROL_DT,
+    PD_VELOCITY_AVG_WINDOW,
+    SERVO_PROFILE,
+    STATE_VELOCITY_AVG_WINDOW,
+)
 from gripper_servers import BaseGripperServer
-from motor_profiles import JOINT_MODEL_TO_MOTOR_MODEL_PROFILE, strip_side_prefix
+from motor_profiles import JOINT_MODEL_TO_MOTOR_MODEL_PROFILE, get_profile_for_joint, strip_side_prefix
 from rby1_controller import PDController
 from rby1_robot import RBY1Robot
 from rby1_udp_bridge import RBY1UdpBridge
@@ -45,23 +56,47 @@ _BODY_JOINT_NAMES = (
     "head_0", "head_1",
 )
 
-# Shared motor gains: kp [N*m/rad], kd [N*m*s/rad].
+# Joint servo gains: kp [N*m/rad], kd [N*m*s/rad].
+# kp: identified on an RB-Y1 Model A v1.2 (chirp/step servo fits; about 2x the motor-datasheet values used before).
+# The robot's drivers run kd ~ 0 with a ~15 ms command delay; their remaining damping (current loop, harmonic drive,
+# structure) is not modeled, so kd is the damping that reproduces the robot's step overshoot. A pure command delay
+# does not change the overshoot, so the same kd serves both servo profiles (config.SERVO_PROFILE).
 _MOTOR_PD_GAINS = {
     "wheel": (262.8, 7.510),
-    "lower_torso": (99750.05, 398.2526),
-    "upper_torso": (29260.1, 106.4),
-    "arm_shoulder": (10640.0, 53.2),
-    "arm_elbow": (4655.0, 21.28),
-    "arm_wrist": (2151.3, 6.024),
-    "arm_wrist2": (4365.12, 5.9024),
+    "lower_torso": (198373.0, 3557.0),
+    "upper_torso": (27229.0, 250.0),
+    "arm_shoulder": (20377.9, 200.0),
+    "arm_elbow": (9079.95, 50.0),
+    "arm_wrist": (4043.89, 11.2),
+    "arm_wrist2": (13882.5, 10.0),
 }
+if SERVO_PROFILE not in ("delayed", "no_delay"):
+    raise ValueError(f"Unknown RBY1_SERVO_PROFILE '{SERVO_PROFILE}'. Valid: 'delayed', 'no_delay'")
 _MOTOR_PD_GAINS["head"] = _MOTOR_PD_GAINS["arm_wrist"]
 
 
-def _joint_pd_gains(joint_name: str) -> tuple[float, float]:
+def _joint_motor_group(joint_name: str) -> str:
     name = strip_side_prefix(joint_name)
-    group = JOINT_MODEL_TO_MOTOR_MODEL_PROFILE.get(name, name.split("_", 1)[0])
-    return _MOTOR_PD_GAINS[group]
+    return JOINT_MODEL_TO_MOTOR_MODEL_PROFILE.get(name, name.split("_", 1)[0])
+
+
+def _joint_pd_gains(joint_name: str) -> tuple[float, float]:
+    return _MOTOR_PD_GAINS[_joint_motor_group(joint_name)]
+
+
+def _joint_command_delay(joint_name: str) -> int:
+    if SERVO_PROFILE == "no_delay":
+        return 0
+    return int(COMMAND_DELAY_TICKS.get(_joint_motor_group(joint_name), 0))
+
+
+def _joint_feedforward_delay(joint_name: str) -> int:
+    if SERVO_PROFILE == "no_delay":
+        return 0
+    if FEEDFORWARD_DELAY_MODE == "equal":
+        return _joint_command_delay(joint_name)
+    table = MEASURED_DRIVER_DELAY_TICKS if FEEDFORWARD_DELAY_MODE == "measured" else FEEDFORWARD_DELAY_TICKS
+    return int(table.get(_joint_motor_group(joint_name), 0))
 
 
 RBY1_MODEL_CONFIGS = {
@@ -83,7 +118,7 @@ RBY1_MODEL_CONFIGS = {
     ),
 }
 
-JOINT_VELOCITY_AVG_WINDOW = 10
+JOINT_VELOCITY_AVG_WINDOW = STATE_VELOCITY_AVG_WINDOW
 DEFAULT_GRIPPER_NAME = "rb_gripper"
 
 
@@ -275,6 +310,11 @@ class RBY1Task(BaseTask):
         self._state_q: Optional[np.ndarray] = None
         self._state_dq: Optional[np.ndarray] = None
         self._state_tau: Optional[np.ndarray] = None
+        self._pd_dq: Optional[np.ndarray] = None
+        self._pd_dq_samples: Optional[np.ndarray] = None
+        self._pd_dq_idx = 0
+        self._friction_coulomb: Optional[np.ndarray] = None
+        self._friction_viscous: Optional[np.ndarray] = None
         self._efforts_full: Optional[np.ndarray] = None
         self._external_force_error_logged = False
         self._last_log_wall_time = time.monotonic()
@@ -588,8 +628,14 @@ class RBY1Task(BaseTask):
         if self._state_q is None or self._state_dq is None or self._efforts_full is None:
             raise RuntimeError("[RBY1Task] joint state buffer not initialised.")
 
-        efforts = self.pd_controller.compute_torque(self._state_q, self._state_dq)
+        efforts = self.pd_controller.compute_torque(self._state_q, self._pd_dq)
         efforts = np.clip(efforts, -self.max_efforts, self.max_efforts)
+        if self._friction_coulomb is not None:
+            # joint friction acts on the joint, not through the driver's current limit
+            v = self._pd_dq
+            efforts = efforts - (
+                self._friction_coulomb * np.tanh(v / FRICTION_VELOCITY_EPS) + self._friction_viscous * v
+            )
         self._efforts_full.fill(0.0)
         self._efforts_full[self.joint_indices] = efforts
         return self._efforts_full
@@ -701,6 +747,14 @@ class RBY1Task(BaseTask):
         np.subtract(self._state_q, self._prev_diff_position, out=self._state_dq)
         self._state_dq /= PD_CONTROL_DT
 
+        # PD velocity: raw difference (or a short average, PD_VELOCITY_AVG_WINDOW), independent of the state average
+        if self._pd_dq_samples is None or self._pd_dq_samples.shape[1] != self._state_dq.shape[0]:
+            self._pd_dq_samples = np.zeros((max(1, PD_VELOCITY_AVG_WINDOW), self._state_dq.shape[0]))
+            self._pd_dq_idx = 0
+        self._pd_dq_samples[self._pd_dq_idx] = self._state_dq
+        self._pd_dq_idx = (self._pd_dq_idx + 1) % len(self._pd_dq_samples)
+        np.mean(self._pd_dq_samples, axis=0, out=self._pd_dq)
+
         expected_sample_shape = (JOINT_VELOCITY_AVG_WINDOW, self._state_dq.shape[0])
         if (
             self._joint_velocity_samples is None
@@ -758,6 +812,9 @@ class RBY1Task(BaseTask):
         self._wheel_multiturn_position = None
         if self._state_tau is not None:
             self._state_tau.fill(0.0)
+        if self._pd_dq is not None:
+            self._pd_dq.fill(0.0)
+        self._pd_dq_samples = None
 
     def post_reset(self) -> None:
         """Initialise joint index mapping and PD controller after a reset."""
@@ -807,6 +864,9 @@ class RBY1Task(BaseTask):
         self._joint_velocity_sample_sum = np.zeros(n_ctrl, dtype=float)
         self._joint_velocity_sample_idx = 0
         self._state_tau = np.zeros(n_ctrl, dtype=float)
+        self._pd_dq = np.zeros(n_ctrl, dtype=float)
+        self._pd_dq_samples = None
+        self._pd_dq_idx = 0
         self._efforts_full = np.zeros(self.num_joints, dtype=float)
 
         self.gripper_command_indices = []
@@ -826,6 +886,15 @@ class RBY1Task(BaseTask):
             self.robot._articulation_view.switch_control_mode("position", joint_indices=self.gripper_command_indices)
 
         self.max_efforts = self.robot._articulation_view.get_max_efforts()[0, self.joint_indices]
+        self._friction_coulomb = None
+        self._friction_viscous = None
+        if FRICTION_MODEL == "torque":
+            body = [name for name in self.model_config.cpp_joint_names]
+            profiles = [get_profile_for_joint(name) for name in body]
+            is_wheel = np.arange(len(body)) < self.model_config.mobility_dof
+            self._friction_coulomb = np.where(is_wheel, 0.0, [pr["dynamic_effort"] for pr in profiles])
+            self._friction_viscous = np.where(is_wheel, 0.0, [pr["viscous_nm_s_per_rad"] for pr in profiles])
+        print(f"[RBY1Task] friction model '{FRICTION_MODEL}'")
 
         self._initialize_pd_controller()
         self._set_default_robot_state()
@@ -836,7 +905,22 @@ class RBY1Task(BaseTask):
             _joint_pd_gains(name) for name in self.model_config.cpp_joint_names
         ], dtype=np.float32).T
 
-        self.pd_controller = PDController(kp=joint_kp, kd=joint_kd, num_joints=len(self.joint_indices))
+        names = self.model_config.cpp_joint_names
+        delay_ticks = np.asarray([_joint_command_delay(name) for name in names], dtype=int)
+        ff_delay_ticks = np.asarray([_joint_feedforward_delay(name) for name in names], dtype=int)
+        self.pd_controller = PDController(
+            kp=joint_kp,
+            kd=joint_kd,
+            num_joints=len(self.joint_indices),
+            delay_ticks=delay_ticks,
+            ff_delay_ticks=ff_delay_ticks,
+        )
+        print(
+            f"[RBY1Task] servo profile '{SERVO_PROFILE}': target delay ticks "
+            f"{dict(zip(names, delay_ticks.tolist()))}, feedforward delay ticks "
+            f"{dict(zip(names, ff_delay_ticks.tolist()))}, PD velocity window {PD_VELOCITY_AVG_WINDOW}, "
+            f"state velocity window {JOINT_VELOCITY_AVG_WINDOW}"
+        )
 
         # Initialise the controller to a neutral state to avoid a sudden torque step on reset.
         self.pd_controller.integrated_velocity_mode.fill(False)
@@ -845,6 +929,7 @@ class RBY1Task(BaseTask):
         self.pd_controller.feedback_gain.fill(1.0)
         self.pd_controller.feedforward_term.fill(0.0)
         self.pd_controller.target_torque.fill(0.0)
+        self.pd_controller.reset_delay()
 
     def _set_default_robot_state(self) -> None:
         """Reset the robot pose/joint state explicitly right after a reset."""

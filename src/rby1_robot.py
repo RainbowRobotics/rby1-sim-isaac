@@ -13,6 +13,7 @@ from isaacsim.core.api.materials.physics_material import PhysicsMaterial
 from isaacsim.core.prims import GeometryPrim, SingleArticulation, SingleRigidPrim
 from pxr import PhysxSchema, Sdf, UsdPhysics
 
+from config import FRICTION_MODEL
 from motor_profiles import get_profile_for_joint
 
 
@@ -144,9 +145,13 @@ class RBY1Robot(SingleArticulation):
         prefix = f"physxJointAxis:{drive_type}"
         # Author armature on the axis API consumed by PhysX.
         self._set_float_attr(prim, f"{prefix}:armature", profile["armature"])
-        self._set_float_attr(prim, f"{prefix}:staticFrictionEffort", profile["static_effort"])
-        self._set_float_attr(prim, f"{prefix}:dynamicFrictionEffort", profile["dynamic_effort"])
-        self._set_float_attr(prim, f"{prefix}:viscousFrictionCoefficient", viscous)
+        # FRICTION_MODEL "torque": friction is applied by RBY1Task as an explicit torque instead
+        physx_friction = FRICTION_MODEL == "physx"
+        self._set_float_attr(prim, f"{prefix}:staticFrictionEffort", profile["static_effort"] if physx_friction else 0.0)
+        self._set_float_attr(
+            prim, f"{prefix}:dynamicFrictionEffort", profile["dynamic_effort"] if physx_friction else 0.0
+        )
+        self._set_float_attr(prim, f"{prefix}:viscousFrictionCoefficient", viscous if physx_friction else 0.0)
 
     def _is_mecanum_roller_revolute_joint(self, prim) -> bool:
         pattern = re.compile(f"^{MECANUM_ROLLER_REVOLUTE_JOINT_PATH_EXPR}$")
