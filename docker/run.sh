@@ -12,7 +12,13 @@
 #   GRIPPER_NAME=rb_gripper ./docker/run.sh
 #
 # Optional environment variables:
-#   IMAGE_NAME       docker image (default: rainbowroboticsofficial/rby1-sim-isaac:0.10.7-a_v1.2)
+#   IMAGE_NAME       docker image (default: rainbowroboticsofficial/rby1-sim-isaac:0.10.7-a_v1.2-isaac6.1.0)
+#   HEADLESS         1 = no GUI windows (simulation --headless, core RBY1_HEADLESS=1); recommended for SDK runs
+#   CPUSET           pin the container to CPU cores (docker --cpuset-cpus); give it 16+ cores
+#   CACHE_CHOWN      1 = chown the cache folders to 1234 (sudo) instead of granting uid 1234 an ACL
+#   RBY1_*           simulator settings passed into the container when set: RBY1_SERVO_PROFILE,
+#                    RBY1_FF_DELAY, RBY1_PHYSICS_DEVICE, RBY1_FRICTION_MODEL, RBY1_FRICTION_VELOCITY_EPS,
+#                    RBY1_PD_VELOCITY_WINDOW, RBY1_UDP_INLINE_RECV, RBY1_TIMING_LOG (see README)
 #   ISAAC_HOST_DIR  persistent cache/config directory (default: ${HOME}/docker/isaac-sim)
 #   CONTAINER_NAME   container name (default: rby1-sim-isaac)
 #   GRIPPER_NAME     default gripper folder under assets/gripper; overridden by --gripper-name
@@ -47,7 +53,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-IMAGE_NAME="${IMAGE_NAME:-rainbowroboticsofficial/rby1-sim-isaac:0.10.7-a_v1.2}"
+IMAGE_NAME="${IMAGE_NAME:-rainbowroboticsofficial/rby1-sim-isaac:0.10.7-a_v1.2-isaac6.1.0}"
 # Expand a bare version tag (e.g. "0.10.7-a_v1.2") to the full registry image name.
 if [[ "${IMAGE_NAME}" != */* && "${IMAGE_NAME}" != *:* ]]; then
     IMAGE_NAME="rainbowroboticsofficial/rby1-sim-isaac:${IMAGE_NAME}"
@@ -111,17 +117,37 @@ for cache_dir in "${CACHE_DIRS[@]}"; do
     cache_stat="$(stat -L -c '%u:%g:%a' -- "${cache_dir}" 2>/dev/null)" ||
         cache_stat="$(sudo stat -L -c '%u:%g:%a' -- "${cache_dir}")"
     IFS=: read -r cache_uid cache_gid cache_mode <<< "${cache_stat}"
-    if [[ "${cache_uid}:${cache_gid}" != "1234:1234" ]]; then
+    if [[ "${cache_uid}:${cache_gid}" == "1234:1234" ]]; then
+        if (( (8#${cache_mode} & 0700) != 0700 )); then
+            sudo chmod u+rwx -- "${cache_dir}"
+        fi
+    elif [[ "${cache_uid}" == "$(id -u)" && "${CACHE_CHOWN:-0}" != "1" ]] && command -v setfacl >/dev/null 2>&1; then
+        # Owned by the invoking user: grant the container user (1234) access with an ACL instead of sudo chown,
+        # and keep access for the invoking user to files the container creates (default ACL entries).
+        setfacl -m "u:1234:rwx,d:u:1234:rwx,d:u:$(id -u):rwx" -- "${cache_dir}"
+    else
         echo "[run] Changing ownership of ${cache_dir} to 1234:1234 (requires sudo)"
         sudo chown 1234:1234 -- "${cache_dir}"
     fi
-    if (( (8#${cache_mode} & 0700) != 0700 )); then
-        sudo chmod u+rwx -- "${cache_dir}"
-    fi
 done
 
-# Allow X11 local access (grant uid=1234 for container user + local socket)
-xhost +SI:localuser:\#1234 +local: >/dev/null 2>&1 || true
+# HEADLESS=1: no Isaac Sim window (simulation.py --headless) and no rby1 core status window (RBY1_HEADLESS=1).
+# X11 is still passed through when a display exists: cores built before RBY1_HEADLESS need it to start.
+HEADLESS="${HEADLESS:-0}"
+X11_ARGS=()
+if [[ "${HEADLESS}" == "1" ]]; then
+    EXTRA_ARGS=("--headless" "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}")
+    X11_ARGS+=(-e "RBY1_HEADLESS=1")
+fi
+if [[ "${HEADLESS}" != "1" || -n "${DISPLAY:-}" ]]; then
+    # Allow X11 local access (grant uid=1234 for container user + local socket)
+    xhost +SI:localuser:\#1234 +local: >/dev/null 2>&1 || true
+    X11_ARGS+=(-e "DISPLAY=${DISPLAY:-}" -v /tmp/.X11-unix:/tmp/.X11-unix:rw)
+    # Mount ~/.Xauthority only if it exists (docker would create a root-owned directory otherwise)
+    if [[ -f "${HOME}/.Xauthority" ]]; then
+        X11_ARGS+=(-v "${HOME}/.Xauthority:/isaac-sim/.Xauthority:rw")
+    fi
+fi
 
 # Mount src/ and assets/ from the rby1-sim-isaac repo into the container
 SRC_MOUNT=(-v "${RBY1_ISAAC_DIR}/src:/opt/rby1-sim-isaac/app:ro")
@@ -176,17 +202,34 @@ echo "[run] Starting Isaac Sim GUI container..."
 echo "      Image: ${IMAGE_NAME}"
 echo ""
 
+# CPUSET=<cpus> pins the container (Isaac Sim + rby1 core) to CPU cores. Give it many cores (16+): Kit runs a task
+# thread per core, and pinning to 8 cores measured rtf 0.63 instead of 0.86-0.91 unpinned on a loaded 64-core host.
+# Simulator settings (see README "Run options"), passed only when set on the host.
+RBY1_ENV_ARGS=()
+for var in RBY1_SERVO_PROFILE RBY1_FF_DELAY RBY1_PHYSICS_DEVICE RBY1_FRICTION_MODEL RBY1_FRICTION_VELOCITY_EPS \
+           RBY1_PD_VELOCITY_WINDOW RBY1_UDP_INLINE_RECV RBY1_TIMING_LOG; do
+    if [[ -n "${!var:-}" ]]; then
+        RBY1_ENV_ARGS+=(-e "${var}=${!var}")
+    fi
+done
+
+CPU_ARGS=()
+if [[ -n "${CPUSET:-}" ]]; then
+    CPU_ARGS=(--cpuset-cpus "${CPUSET}")
+fi
+
 docker run \
     --name "${CONTAINER_NAME}" \
+    ${CPU_ARGS[@]+"${CPU_ARGS[@]}"} \
     --rm "${TTY_FLAGS[@]}" \
     --gpus all \
     --network=host \
     --ipc=host \
     -e "ACCEPT_EULA=Y" \
     -e "PRIVACY_CONSENT=Y" \
-    -e "DISPLAY=${DISPLAY}" \
-    -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
-    -v "${HOME}/.Xauthority:/isaac-sim/.Xauthority:rw" \
+    -e "PYTHONUNBUFFERED=1" \
+    ${RBY1_ENV_ARGS[@]+"${RBY1_ENV_ARGS[@]}"} \
+    ${X11_ARGS[@]+"${X11_ARGS[@]}"} \
     "${SRC_MOUNT[@]}" \
     "${ASSETS_MOUNT[@]}" \
     -v "${ISAAC_HOST_DIR}/cache/main:/isaac-sim/.cache:rw" \

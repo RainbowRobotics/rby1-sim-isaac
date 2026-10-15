@@ -315,10 +315,12 @@ class RBY1Task(BaseTask):
         self._pd_dq_idx = 0
         self._friction_coulomb: Optional[np.ndarray] = None
         self._friction_viscous: Optional[np.ndarray] = None
+        self._drive_torque: Optional[np.ndarray] = None
         self._efforts_full: Optional[np.ndarray] = None
         self._external_force_error_logged = False
         self._last_log_wall_time = time.monotonic()
         self._last_log_sim_time: Optional[float] = None
+        self._timing = {"udp_wait": 0.0, "state": 0.0, "effort": 0.0}
 
     # ------------------------------------------------------------------
     # Scene setup
@@ -443,6 +445,7 @@ class RBY1Task(BaseTask):
         if self._last_log_sim_time is None:
             self._last_log_sim_time = simulation_time
 
+        t_start = time.perf_counter()
         if self.udp_bridge is None:
             # Standalone mode: drive a built-in test trajectory (C++ DOF order).
             self._update_full_state(simulation_time, update_velocity=True)
@@ -466,9 +469,12 @@ class RBY1Task(BaseTask):
                 self._apply_udp_command(cmd)
             elif self._state_sent_once and self._command_stream_started:
                 self._command_wait_miss_count_since_log += 1
+        t_command = time.perf_counter()
+        self._timing["udp_wait" if self.udp_bridge is not None else "state"] += t_command - t_start
 
         # External PD torque → max_efforts clipping → expand to the full Isaac Sim DOF buffer.
         self.robot.set_joint_efforts(self._compute_reordered_efforts())
+        self._timing["effort"] += time.perf_counter() - t_command
 
         # Optional sim gripper bridge.
         if self.gripper_enabled and self.gripper_server is not None:
@@ -484,6 +490,13 @@ class RBY1Task(BaseTask):
             print("wall_dt={:.3f}s, sim_dt={:.3f}s, rtf={:.3f}".format(wall_dt, sim_dt, realtime_factor))
             self._last_log_wall_time = now_wall
             self._last_log_sim_time = simulation_time
+
+    def consume_timing(self, steps: int = 500) -> dict[str, float]:
+        """Mean time per step [ms] of the task's parts since the last call (for Simulation's timing log)."""
+        out = {k: 1e3 * v / steps for k, v in self._timing.items()}
+        for k in self._timing:
+            self._timing[k] = 0.0
+        return out
 
     def _apply_external_force_ui(self) -> None:
         """Apply force/torque from the ExternalForceUI to the selected body only."""
@@ -552,7 +565,9 @@ class RBY1Task(BaseTask):
         if self._last_pre_step_sim_time is not None:
             state_time = self._last_pre_step_sim_time + physics_dt
 
+        t_state = time.perf_counter()
         self._update_udp_state(state_time, update_velocity=True)
+        self._timing["state"] += time.perf_counter() - t_state
 
         self.udp_bridge.send_state(
             t=state_time,
@@ -630,6 +645,7 @@ class RBY1Task(BaseTask):
 
         efforts = self.pd_controller.compute_torque(self._state_q, self._pd_dq)
         efforts = np.clip(efforts, -self.max_efforts, self.max_efforts)
+        self._drive_torque = efforts
         if self._friction_coulomb is not None:
             # joint friction acts on the joint, not through the driver's current limit
             v = self._pd_dq
@@ -677,14 +693,12 @@ class RBY1Task(BaseTask):
         q = self._update_wheel_multiturn_position(raw_q)
         np.copyto(self._state_q, q)
         self._update_joint_velocity(sample_time, update_velocity)
-        # joints_tau = self.robot.get_measured_joint_efforts()
-        joints_tau = self.robot.get_applied_joint_efforts()
-        raw_tau = joints_tau
-        if raw_tau is None or np.ndim(raw_tau) == 0:
+        # Reported torque = the drive torque this task applied (same values get_applied_joint_efforts() returns,
+        # without a second device read per tick). Like the robot's current-based torque it excludes friction.
+        if self._drive_torque is None:
             self._state_tau.fill(0.0)
         else:
-            tau = np.array(raw_tau)[self.joint_indices]
-            np.copyto(self._state_tau, tau)
+            np.copyto(self._state_tau, self._drive_torque)
 
     def _update_wheel_multiturn_position(self, raw_q: np.ndarray) -> np.ndarray:
         """Return joint positions with wheel joints unwrapped into a multi-turn frame."""
@@ -867,6 +881,7 @@ class RBY1Task(BaseTask):
         self._pd_dq = np.zeros(n_ctrl, dtype=float)
         self._pd_dq_samples = None
         self._pd_dq_idx = 0
+        self._drive_torque = None
         self._efforts_full = np.zeros(self.num_joints, dtype=float)
 
         self.gripper_command_indices = []

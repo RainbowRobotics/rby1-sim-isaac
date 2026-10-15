@@ -51,6 +51,9 @@ class Simulation:
         robot_model: str = "m",
         gripper_enabled: bool = False,
         gripper_name: str = "rb_gripper",
+        headless: bool = False,
+        physics_device: str = "gpu",
+        render_hz: float | None = None,
     ):
         # Imports kept lazy: many of these depend on SimulationApp being initialised.
         from isaacsim.core.api import World
@@ -62,7 +65,14 @@ class Simulation:
         self.robot_model = normalize_robot_model(robot_model)
         self.gripper_name = gripper_name
         self._physics_dt = PHYSICS_DT
-        self._rendering_dt = RENDER_DT
+        # Headless runs do not render at all unless render_hz asks for it (rendering costs lockstep time).
+        self._headless = headless
+        if render_hz is None:
+            render_hz = 0.0 if headless else 1.0 / RENDER_DT
+        self._rendering_dt = (1.0 / render_hz) if render_hz > 0.0 else None
+        # RBY1_TIMING_LOG=1: print where each lockstep step spends its time, every 500 steps.
+        self._timing_log = os.environ.get("RBY1_TIMING_LOG", "0") not in ("", "0")
+        self._timing = {"step": 0.0, "post": 0.0, "render": 0.0, "steps": 0}
         self._last_render_wall_time = 0.0
         self._grpc_reset_settle_seconds = _read_nonnegative_float_env(
             "RBY1_GRPC_RESET_SETTLE_SECONDS",
@@ -115,10 +125,12 @@ class Simulation:
             stage_units_in_meters=STAGE_UNITS_IN_METERS,
             sim_params={
                 "solver_type": 0,
-                "use_gpu_pipeline": True,
+                # One articulation: the CPU pipeline avoids a GPU->CPU sync on every state read in the 2 ms loop.
+                "use_gpu_pipeline": physics_device == "gpu",
                 "enable_scene_query_support": False,
                 "use_fabric": True,
             },
+            **({"device": "cpu"} if physics_device == "cpu" else {}),
         )
         self.task = RBY1Task(
             udp_bridge=self.udp_bridge,
@@ -135,7 +147,10 @@ class Simulation:
         self._input = None
         self._keyboard = None
         self._keyboard_sub = None
-        self._register_keyboard_callbacks()
+        try:
+            self._register_keyboard_callbacks()
+        except Exception as exc:  # headless runs may have no app window/keyboard
+            print(f"[Simulation] keyboard callbacks unavailable: {exc}")
 
         # GUI external-force controller (best-effort — skipped if the UI is unavailable).
         self.force_ui = None
@@ -237,14 +252,42 @@ class Simulation:
         """Run one physics step and decouple rendering from the physics rate."""
         if self.world.is_playing():
             # Isaac lockstep: World.step(render=False) drives one physics step and the task pre_step.
+            if not self._timing_log:
+                self.world.step(render=False)
+                self.task.post_physics_step(self._physics_dt)
+                self._render_if_due()
+                return
+            t0 = time.perf_counter()
             self.world.step(render=False)
+            t1 = time.perf_counter()
             self.task.post_physics_step(self._physics_dt)
+            t2 = time.perf_counter()
             self._render_if_due()
+            t3 = time.perf_counter()
+            timing = self._timing
+            timing["step"] += t1 - t0
+            timing["post"] += t2 - t1
+            timing["render"] += t3 - t2
+            timing["steps"] += 1
+            if timing["steps"] == 500:
+                per = {k: 1e3 * v / 500 for k, v in timing.items() if k != "steps"}
+                task_timing = self.task.consume_timing() if hasattr(self.task, "consume_timing") else {}
+                print(
+                    "[timing] ms/step: world.step {step:.3f} (of which ".format(**per)
+                    + ", ".join(f"{k} {v:.3f}" for k, v in task_timing.items())
+                    + "), post {post:.3f}, render {render:.3f}".format(**per)
+                )
+                for k in timing:
+                    timing[k] = 0.0 if k != "steps" else 0
         else:
+            if self._rendering_dt is None:
+                time.sleep(0.01)  # paused and headless: nothing to draw
             self._render_if_due()
 
     def _render_if_due(self) -> None:
-        """Render at most once per ``rendering_dt`` (wall-clock based)."""
+        """Render at most once per ``rendering_dt`` (wall-clock based); never when headless without render_hz."""
+        if self._rendering_dt is None:
+            return
         now = time.monotonic()
         if now - self._last_render_wall_time >= self._rendering_dt:
             self.world.render()
@@ -426,6 +469,12 @@ def _build_argparser():
                    help="Port for receiving gripper commands")
     p.add_argument("--gripper-state-ip", default=GRIPPER_HOST,
                    help="IP for sending gripper state")
+    p.add_argument("--headless", action="store_true",
+                   help="Run without the GUI window (no rendering unless --render-hz is given)")
+    p.add_argument("--physics-device", choices=("gpu", "cpu"), default=os.environ.get("RBY1_PHYSICS_DEVICE", "gpu"),
+                   help="PhysX pipeline. 'cpu' is faster for this single articulation in lockstep mode")
+    p.add_argument("--render-hz", type=float, default=None,
+                   help="Render rate [Hz] (default 30 with the GUI, 0 = never when headless)")
     p.add_argument("--gripper-state-port", type=int, default=GRIPPER_STATE_PORT,
                    help="Port for sending gripper state")
     return p
@@ -440,7 +489,7 @@ def main() -> None:
     if args.sim_gripper and not gripper_enabled:
         print("[Simulation] --sim-gripper ignored because --no-gripper is set.")
 
-    simulation_app = SimulationApp({"headless": False})
+    simulation_app = SimulationApp({"headless": args.headless})
 
     simulation = Simulation(
         simulation_app,
@@ -455,6 +504,9 @@ def main() -> None:
         sim_gripper_state_port=args.gripper_state_port,
         robot_model=args.model,
         gripper_name=args.gripper_name,
+        headless=args.headless,
+        physics_device=args.physics_device,
+        render_hz=args.render_hz,
     )
     simulation.initial_reset()
 

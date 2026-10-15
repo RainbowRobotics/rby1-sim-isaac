@@ -43,10 +43,10 @@ cd rby1-sim-isaac
 Connects rby1-sdk with the Isaac Sim container to enable robot control via rby1 core.
 
 ```bash
-./docker/run_sdk.sh --image 0.10.7-a_v1.2   # Model A v1.2
-./docker/run_sdk.sh --image 0.10.7-m_v1.2   # Model M v1.2
-./docker/run_sdk.sh --image 0.10.7-a_v1.2 --gripper --gripper-name rb_gripper
-./docker/run_sdk.sh --image 0.10.7-m_v1.2 --gripper --gripper-name rb_gripper
+./docker/run_sdk.sh --image 0.10.7-a_v1.2-isaac6.1.0   # Model A v1.2
+./docker/run_sdk.sh --image 0.10.7-m_v1.2-isaac6.1.0   # Model M v1.2
+./docker/run_sdk.sh --image 0.10.7-a_v1.2-isaac6.1.0 --gripper --gripper-name rb_gripper
+HEADLESS=1 ./docker/run_sdk.sh --image 0.10.7-a_v1.2-isaac6.1.0   # no GUI window (faster lockstep)
 ```
 
 #### Standalone mode
@@ -54,15 +54,57 @@ Connects rby1-sdk with the Isaac Sim container to enable robot control via rby1 
 Runs Isaac Sim only. The robot is controlled by the built-in PD trajectory in `RBY1Task`; no `app_main` process is started and the robot command/state UDP bridge is disabled.
 
 ```bash
-./docker/run.sh --image 0.10.7-a_v1.2   # Model A v1.2
-./docker/run.sh --image 0.10.7-m_v1.2   # Model M v1.2
-GRIPPER_NAME=rb_gripper ./docker/run.sh --image 0.10.7-m_v1.2
+./docker/run.sh --image 0.10.7-a_v1.2-isaac6.1.0   # Model A v1.2
+./docker/run.sh --image 0.10.7-m_v1.2-isaac6.1.0   # Model M v1.2
+GRIPPER_NAME=rb_gripper ./docker/run.sh --image 0.10.7-m_v1.2-isaac6.1.0
 ```
 
 The default launch uses the no-gripper base USD. Additional arguments after
 `--image` are forwarded to `simulation.py`, including `--gripper`,
 `--gripper-name <name>`, and `--no-sim-gripper`. A gripper can also be selected
 and enabled with the `GRIPPER_NAME` environment variable.
+
+### Run options
+
+| Environment / argument | Default | Meaning |
+|---|---|---|
+| `HEADLESS=1` (`--headless`) | off | No GUI windows (Isaac Sim with `--headless`, rby1 core with `RBY1_HEADLESS=1`) and no rendering. Recommended for SDK/lockstep runs: drawing the window can slow the lockstep loop far below real time (seen at 1/40 on a VM X server). `--render-hz` renders anyway. |
+| `RBY1_SERVO_PROFILE` | `delayed` | Joint servo model. `delayed`: per-group equivalent command delay (0-16 ms) matched to the robot's step response. `no_delay`: same gains without delay (arm steps ~10 ms faster than the robot). |
+| `RBY1_FF_DELAY` | `fitted` | Delay of torque commands (feedforward torque, feedback gain): `fitted` per group from joint impedance steps, `equal` = the target delay, `measured` = the drivers' 14-17 ms (over-delays). |
+| `RBY1_UDP_INLINE_RECV` | `1` | Read UDP commands in the simulation thread (no receive-thread handoff per 2 ms tick). `0` = background thread. |
+| `RBY1_PHYSICS_DEVICE` (`--physics-device`) | `gpu` | PhysX pipeline, `gpu` or `cpu` (no measured speed difference for this single articulation). |
+| `RBY1_FRICTION_MODEL` | `physx` | `physx`: PhysX joint-axis friction. `torque`: the same Coulomb/viscous values as an explicit torque in the PD loop. |
+| `RBY1_TIMING_LOG=1` | off | Print the time per lockstep step by part (physics, UDP wait, state, effort, render) every 500 steps. |
+| `CPUSET` | - | Pin the container to CPU cores (`--cpuset-cpus`); give it 16+ cores, Kit runs a task thread per core. |
+| `CACHE_CHOWN=1` | off | `run.sh` grants the container user (uid 1234) access to cache folders owned by the invoking user with an ACL (`setfacl`, no sudo); set this to chown them to 1234 with sudo instead. |
+
+The Isaac Sim 5.1 images (`0.10.7-*_v1.2`) crash in the RTX renderer (`librtx.scenedb`) at startup on an RTX 5090
+with driver 615.71, also headless; use the `-isaac6.1.0` images there.
+
+### Joint servo model
+
+The simulated joint servo (`src/rby1_task.py`, `src/rby1_controller.py`, `src/config.py`) reproduces the drivers
+identified on an RB-Y1 Model A v1.2: stiffness `kp` as measured (about 2x the motor-datasheet values used before),
+a per-group delay of the command (target, feedback gain and feedforward torque) and a D term on the undelayed joint
+velocity. The previous D term used a 10-sample moving-average velocity (~9 ms lag), which excited the elbow and
+wrist at the identified gains. Motor profiles (`src/motor_profiles.py`) and drive effort limits in the USD
+(shoulder 136.5, elbow 78, wrist roll 44 Nm = measured driver saturation) come from the same measurements.
+
+Checked through the rby1 core in SDK mode (`-isaac6.1.0` image, rb_gripper mounted) against the same experiments on
+the robot:
+
+| Experiment | Robot | Simulation |
+|---|---|---|
+| Position step 0.5/1 deg, overshoot / 90 % rise: shoulder | 11.5 % / 31 ms | 11.2 % / 34 ms |
+| elbow | 12.3 % / 29 ms | 12.9 % / 29 ms |
+| wrist | 24.2 % / 28 ms | 26.7 % / 31 ms |
+| wrist roll | 55.2 % / 26 ms | 57.6 % / 30 ms |
+| Position step 0.2 deg, lower / upper torso overshoot | 4.6 % / 4.0 % | 3.8 % / 5.2 % |
+| Chirp 0.3 deg 0.2-15 Hz, amplitude ratio 1-10 Hz (shoulder, elbow) | 0.99-1.04 | 0.97-1.02 |
+| Joint impedance step K 500 (elbow), overshoot / 50 % delay | 14.5 % / 31.7 ms | 12.4 % / 32.4 ms |
+| Joint impedance step K 900 (shoulder) | 7.8 % / 27.7 ms | 6.7 % / 31.5 ms |
+
+The robot's structural resonances (torso ~2.5 Hz, arm ~10-12 Hz) are not modeled (rigid links).
 
 ### Custom gripper assets
 
@@ -112,18 +154,20 @@ The following images are currently supported. Each image automatically loads the
 USD asset matching its model (via the `ROBOT_MODEL_NAME` env var), so no extra
 flag is required.
 
-| Tag | Model |
-|-----|-------|
-| `0.10.7-a_v1.2` | Model A v1.2 |
-| `0.10.7-m_v1.2` | Model M v1.2 |
+| Tag | Model | Isaac Sim |
+|-----|-------|-----------|
+| `0.10.7-a_v1.2-isaac6.1.0` | Model A v1.2 | 6.1.0 |
+| `0.10.7-m_v1.2-isaac6.1.0` | Model M v1.2 | 6.1.0 |
+| `0.10.7-a_v1.2` | Model A v1.2 | 5.1.0 |
+| `0.10.7-m_v1.2` | Model M v1.2 | 5.1.0 |
 
 ## Docker image tag convention
 
 ```
-rainbowroboticsofficial/rby1-sim-isaac:<version>-<model>_v<model_version>
+rainbowroboticsofficial/rby1-sim-isaac:<version>-<model>_v<model_version>[-isaac<isaac_version>]
 
-e.g.) rainbowroboticsofficial/rby1-sim-isaac:0.10.7-a_v1.2   # Model A v1.2
-      rainbowroboticsofficial/rby1-sim-isaac:0.10.7-m_v1.3   # Model M v1.3
+e.g.) rainbowroboticsofficial/rby1-sim-isaac:0.10.7-a_v1.2-isaac6.1.0   # Model A v1.2, Isaac Sim 6.1.0
+      rainbowroboticsofficial/rby1-sim-isaac:0.10.7-a_v1.2              # Model A v1.2, Isaac Sim 5.1.0
 ```
 
 ## UDP ports

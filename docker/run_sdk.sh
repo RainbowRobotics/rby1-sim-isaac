@@ -47,7 +47,7 @@ while [[ $# -gt 0 ]]; do
 done
 set -- "${SIM_ARGS[@]+"${SIM_ARGS[@]}"}"  # replace $@ with the remaining args after parsing
 
-IMAGE_NAME="${IMAGE_NAME:-0.10.7-a_v1.2}"
+IMAGE_NAME="${IMAGE_NAME:-0.10.7-a_v1.2-isaac6.1.0}"
 export IMAGE_NAME
 # Expand a bare version tag (e.g. "0.10.7-a_v1.2") to the full registry image name.
 if [[ "${IMAGE_NAME}" != */* && "${IMAGE_NAME}" != *:* ]]; then
