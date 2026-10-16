@@ -102,13 +102,13 @@ the robot:
 | wrist roll | 55.2 % / 26 ms | 57.6 % / 30 ms |
 | Position step 0.2 deg, lower / upper torso overshoot | 4.6 % / 4.0 % | 3.8 % / 5.2 % |
 | Chirp 0.3 deg 0.2-15 Hz, amplitude ratio 1-10 Hz (shoulder, elbow) | 0.99-1.04 | 0.97-1.02 |
-| Joint impedance step, overshoot / 50 % delay: shoulder K 900 | 7.8 % / 27.7 ms | 7.8 % / 23 ms |
-| elbow K 500 | 14.5 % / 31.7 ms | 17 % / 23 ms |
-| wrist K 500, right_arm_4 / right_arm_5 | 30 % / 36 %, 21.5 ms | 29-34 % / 25 %, 20-21 ms |
-| wrist roll K 1000 | 25 % / 58 ms | 25-30 % / 42-44 ms |
+| Joint impedance step, overshoot / 50 % delay: shoulder K 900 | 7.8 % / 27.7 ms | 7.7 % / 23 ms |
+| elbow K 500 | 14.5 % / 31.7 ms | 12 % / 20 ms |
+| wrist K 500, right_arm_4 / right_arm_5 | 30 % / 36 %, 21.5 ms | 29 % / 25 %, 18-20 ms |
+| wrist roll K 1000 | 25 % / 58 ms | 25 % / 41 ms |
 
 The robot's structural resonances (torso ~2.5 Hz, arm ~10-12 Hz) are not modeled (rigid links). In joint impedance
-mode the robot follows the reference later than the simulation (elbow 31.7 vs 23 ms to 50 %, wrist roll 58 vs 43 ms)
+mode the robot follows the reference later than the simulation (elbow 31.7 vs 20 ms to 50 %, wrist roll 58 vs 41 ms)
 with similar overshoot; a longer torque delay does not close that gap (it only raises the overshoot), so it is
 left open.
 
