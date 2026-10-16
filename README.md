@@ -96,15 +96,20 @@ the robot:
 | Experiment | Robot | Simulation |
 |---|---|---|
 | Position step 0.5/1 deg, overshoot / 90 % rise: shoulder | 11.5 % / 31 ms | 11.2 % / 34 ms |
-| elbow | 12.3 % / 29 ms | 12.9 % / 29 ms |
+| elbow | 12.3 % / 29 ms | 12.9 % / 31 ms |
 | wrist | 24.2 % / 28 ms | 26.7 % / 31 ms |
 | wrist roll | 55.2 % / 26 ms | 57.6 % / 30 ms |
 | Position step 0.2 deg, lower / upper torso overshoot | 4.6 % / 4.0 % | 3.8 % / 5.2 % |
 | Chirp 0.3 deg 0.2-15 Hz, amplitude ratio 1-10 Hz (shoulder, elbow) | 0.99-1.04 | 0.97-1.02 |
-| Joint impedance step K 500 (elbow), overshoot / 50 % delay | 14.5 % / 31.7 ms | 12.4 % / 32.4 ms |
-| Joint impedance step K 900 (shoulder) | 7.8 % / 27.7 ms | 6.7 % / 31.5 ms |
+| Joint impedance step, overshoot / 50 % delay: shoulder K 900 | 7.8 % / 27.7 ms | 7.8 % / 23 ms |
+| elbow K 500 | 14.5 % / 31.7 ms | 17 % / 23 ms |
+| wrist K 500, right_arm_4 / right_arm_5 | 30 % / 36 %, 21.5 ms | 29-34 % / 25 %, 20-21 ms |
+| wrist roll K 1000 | 25 % / 58 ms | 25-30 % / 42-44 ms |
 
-The robot's structural resonances (torso ~2.5 Hz, arm ~10-12 Hz) are not modeled (rigid links).
+The robot's structural resonances (torso ~2.5 Hz, arm ~10-12 Hz) are not modeled (rigid links). In joint impedance
+mode the robot follows the reference later than the simulation (elbow 31.7 vs 23 ms to 50 %, wrist roll 58 vs 43 ms)
+with similar overshoot; a longer torque delay does not close that gap (it only raises the overshoot), so it is
+left open.
 
 ### Custom gripper assets
 

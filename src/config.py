@@ -112,19 +112,20 @@ COMMAND_DELAY_TICKS: Final[dict[str, int]] = {
 }
 
 # Delay of the feedback gain and feedforward torque per motor group [ticks] (torque commands: joint impedance and
-# other feedback-gain-0 modes). Fitted through the rby1 core (joint impedance steps K 500/900, 50 % delay
-# and overshoot vs the robot): the shoulder matches best undelayed (29.1 ms / 6.8 % vs robot 27.7 ms / 7.8 %;
-# with 2-3 ticks 34-35 ms), the elbow with its target delay (33.1 ms / 11.9 % vs 31.7 ms / 14.5 %; undelayed
-# 19.6 ms / 1.6 %). Groups without an impedance record use their target delay. The drivers' measured delay
-# (7-8 ticks for every group, RBY1_FF_DELAY=measured) over-delays: 31-34 % overshoot and the robot's torque_swing
-# guard trips. RBY1_FF_DELAY=equal uses COMMAND_DELAY_TICKS for all groups.
+# other feedback-gain-0 modes). Fitted through the rby1 core against the robot's joint impedance steps (overshoot,
+# 50 % delay): shoulder undelayed (K 900: 7.8 % / 23 ms vs robot 7.8 % / 27.7 ms; 2-4 ticks 10-15 %), elbow 5
+# (K 500: 17 % / 23 ms vs 14.5 % / 31.7 ms; 7-8 ticks 29-32 % and still 24-28 ms, so the remaining delay is not a
+# command delay), wrist 4 (K 500: 25-34 % / 20-21 ms vs 30-36 % / 21.5 ms; 7 ticks 58-63 %), wrist roll 2
+# (K 1000: 25-30 % / 42-44 ms vs 25 % / 58 ms; 8 ticks 59 %). The drivers' measured delay (7-8 ticks for every group,
+# RBY1_FF_DELAY=measured) over-delays: impedance steps overshoot about twice the robot's.
+# RBY1_FF_DELAY=equal uses COMMAND_DELAY_TICKS for all groups.
 FEEDFORWARD_DELAY_TICKS: Final[dict[str, int]] = {
     "lower_torso": 0,
     "upper_torso": 2,
     "arm_shoulder": 0,
     "arm_elbow": 5,
-    "arm_wrist": 7,
-    "arm_wrist2": 8,
+    "arm_wrist": 4,
+    "arm_wrist2": 2,
     "head": 7,
     "wheel": 0,
 }
