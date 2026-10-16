@@ -72,6 +72,12 @@ class Simulation:
         self._rendering_dt = (1.0 / render_hz) if render_hz > 0.0 else None
         # RBY1_TIMING_LOG=1: print where each lockstep step spends its time, every 500 steps.
         self._timing_log = os.environ.get("RBY1_TIMING_LOG", "0") not in ("", "0")
+        # Real-time pacing: one physics step per PHYSICS_DT of wall-clock time. A step that ends early waits for its
+        # slot; a late step does not wait, so the loop catches up instead of losing time. Default on in rby1-sdk mode
+        # (SDK clients run in wall-clock time), off standalone. RBY1_REALTIME=1/0 forces it.
+        realtime_env = os.environ.get("RBY1_REALTIME", "").strip()
+        self._realtime = (realtime_env not in ("0", "false")) if realtime_env else use_udp
+        self._next_step_wall_time: float | None = None
         self._timing = {"step": 0.0, "post": 0.0, "render": 0.0, "steps": 0}
         self._last_render_wall_time = 0.0
         self._grpc_reset_settle_seconds = _read_nonnegative_float_env(
@@ -195,6 +201,7 @@ class Simulation:
     # ------------------------------------------------------------------
 
     def initial_reset(self) -> None:
+        self._next_step_wall_time = None
         self.world.reset()
         self.world.initialize_physics()
         self.robot = self.world.scene.get_object("RBY1")
@@ -230,6 +237,7 @@ class Simulation:
         self.robot = self.world.scene.get_object("RBY1")
         self._last_render_wall_time = 0.0
         self.reset_needed = False
+        self._next_step_wall_time = None
         self.world.pause()
         print("[Simulation] Reset")
 
@@ -256,6 +264,7 @@ class Simulation:
                 self.world.step(render=False)
                 self.task.post_physics_step(self._physics_dt)
                 self._render_if_due()
+                self._pace_realtime()
                 return
             t0 = time.perf_counter()
             self.world.step(render=False)
@@ -279,10 +288,29 @@ class Simulation:
                 )
                 for k in timing:
                     timing[k] = 0.0 if k != "steps" else 0
+            self._pace_realtime()
         else:
+            self._next_step_wall_time = None
             if self._rendering_dt is None:
                 time.sleep(0.01)  # paused and headless: nothing to draw
             self._render_if_due()
+
+    # Wall-clock lag after which the pacing schedule restarts instead of catching up (e.g. after a stall).
+    _MAX_PACING_LAG = 0.05
+
+    def _pace_realtime(self) -> None:
+        """Hold the step rate at real time with catch-up (see RBY1_REALTIME)."""
+        if not self._realtime:
+            return
+        now = time.perf_counter()
+        if self._next_step_wall_time is None or now - self._next_step_wall_time > self._MAX_PACING_LAG:
+            self._next_step_wall_time = now
+        self._next_step_wall_time += self._physics_dt
+        remaining = self._next_step_wall_time - time.perf_counter()
+        if remaining > 0.0003:
+            time.sleep(remaining - 0.0002)
+        while time.perf_counter() < self._next_step_wall_time:
+            pass
 
     def _render_if_due(self) -> None:
         """Render at most once per ``rendering_dt`` (wall-clock based); never when headless without render_hz."""

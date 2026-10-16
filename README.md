@@ -75,6 +75,7 @@ and enabled with the `GRIPPER_NAME` environment variable.
 | `RBY1_PHYSICS_DEVICE` (`--physics-device`) | `gpu` | PhysX pipeline, `gpu` or `cpu` (no measured speed difference for this single articulation). |
 | `RBY1_FRICTION_MODEL` | `physx` | `physx`: PhysX joint-axis friction. `torque`: the same Coulomb/viscous values as an explicit torque in the PD loop. |
 | `RBY1_TIMING_LOG=1` | off | Print the time per lockstep step by part (physics, UDP wait, state, effort, render) every 500 steps. |
+| `RBY1_REALTIME` | on with `--udp`, off standalone | Pace the physics steps to wall-clock time (one step per 2 ms); a late step does not wait, so the loop catches up. `0` runs as fast as possible, `1` paces standalone runs too. |
 | `CPUSET` | - | Pin the container to CPU cores (`--cpuset-cpus`); give it 16+ cores, Kit runs a task thread per core. |
 | `CACHE_CHOWN=1` | off | `run.sh` grants the container user (uid 1234) access to cache folders owned by the invoking user with an ACL (`setfacl`, no sudo); set this to chown them to 1234 with sudo instead. |
 

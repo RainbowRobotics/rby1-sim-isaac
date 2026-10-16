@@ -18,7 +18,7 @@
 #   CACHE_CHOWN      1 = chown the cache folders to 1234 (sudo) instead of granting uid 1234 an ACL
 #   RBY1_*           simulator settings passed into the container when set: RBY1_SERVO_PROFILE,
 #                    RBY1_FF_DELAY, RBY1_PHYSICS_DEVICE, RBY1_FRICTION_MODEL, RBY1_FRICTION_VELOCITY_EPS,
-#                    RBY1_PD_VELOCITY_WINDOW, RBY1_UDP_INLINE_RECV, RBY1_TIMING_LOG (see README)
+#                    RBY1_PD_VELOCITY_WINDOW, RBY1_UDP_INLINE_RECV, RBY1_TIMING_LOG, RBY1_REALTIME (see README)
 #   ISAAC_HOST_DIR  persistent cache/config directory (default: ${HOME}/docker/isaac-sim)
 #   CONTAINER_NAME   container name (default: rby1-sim-isaac)
 #   GRIPPER_NAME     default gripper folder under assets/gripper; overridden by --gripper-name
@@ -207,7 +207,7 @@ echo ""
 # Simulator settings (see README "Run options"), passed only when set on the host.
 RBY1_ENV_ARGS=()
 for var in RBY1_SERVO_PROFILE RBY1_FF_DELAY RBY1_PHYSICS_DEVICE RBY1_FRICTION_MODEL RBY1_FRICTION_VELOCITY_EPS \
-           RBY1_PD_VELOCITY_WINDOW RBY1_UDP_INLINE_RECV RBY1_TIMING_LOG; do
+           RBY1_PD_VELOCITY_WINDOW RBY1_UDP_INLINE_RECV RBY1_TIMING_LOG RBY1_REALTIME; do
     if [[ -n "${!var:-}" ]]; then
         RBY1_ENV_ARGS+=(-e "${var}=${!var}")
     fi
