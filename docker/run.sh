@@ -12,7 +12,7 @@
 #   GRIPPER_NAME=rb_gripper ./docker/run.sh
 #
 # Optional environment variables:
-#   IMAGE_NAME       docker image (default: rainbowroboticsofficial/rby1-sim-isaac:0.10.7-a_v1.2-isaac6.1.0)
+#   IMAGE_NAME       docker image (default: rainbowroboticsofficial/rby1-sim-isaac:0.10.7-a_v1.2-isaac6.1.0-r1)
 #   HEADLESS         1 = no GUI windows (simulation --headless, core RBY1_HEADLESS=1); recommended for SDK runs
 #   CPUSET           pin the container to CPU cores (docker --cpuset-cpus); give it 16+ cores
 #   CACHE_CHOWN      1 = chown the cache folders to 1234 (sudo) instead of granting uid 1234 an ACL
@@ -53,7 +53,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-IMAGE_NAME="${IMAGE_NAME:-rainbowroboticsofficial/rby1-sim-isaac:0.10.7-a_v1.2-isaac6.1.0}"
+IMAGE_NAME="${IMAGE_NAME:-rainbowroboticsofficial/rby1-sim-isaac:0.10.7-a_v1.2-isaac6.1.0-r1}"
 # Expand a bare version tag (e.g. "0.10.7-a_v1.2") to the full registry image name.
 if [[ "${IMAGE_NAME}" != */* && "${IMAGE_NAME}" != *:* ]]; then
     IMAGE_NAME="rainbowroboticsofficial/rby1-sim-isaac:${IMAGE_NAME}"
